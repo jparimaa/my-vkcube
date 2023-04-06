@@ -407,6 +407,7 @@ struct demo {
 
     PFN_vkGetPhysicalDeviceSurfaceSupportKHR fpGetPhysicalDeviceSurfaceSupportKHR;
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR fpGetPhysicalDeviceSurfaceCapabilitiesKHR;
+    PFN_vkGetPhysicalDeviceSurfaceCapabilities2KHR fpGetPhysicalDeviceSurfaceCapabilities2KHR;
     PFN_vkGetPhysicalDeviceSurfaceFormatsKHR fpGetPhysicalDeviceSurfaceFormatsKHR;
     PFN_vkGetPhysicalDeviceSurfacePresentModesKHR fpGetPhysicalDeviceSurfacePresentModesKHR;
     PFN_vkCreateSwapchainKHR fpCreateSwapchainKHR;
@@ -797,6 +798,10 @@ static void demo_set_image_layout(struct demo *demo, VkImage image, VkImageAspec
             image_memory_barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
             break;
 
+        case VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR:
+            image_memory_barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+            break;
+
         default:
             image_memory_barrier.dstAccessMask = 0;
             break;
@@ -924,7 +929,7 @@ void demo_build_image_ownership_cmd(struct demo *demo, int i) {
                                                     .srcAccessMask = 0,
                                                     .dstAccessMask = 0,
                                                     .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                                                    .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                                                    .newLayout = VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR,
                                                     .srcQueueFamilyIndex = demo->graphics_queue_family_index,
                                                     .dstQueueFamilyIndex = demo->present_queue_family_index,
                                                     .image = demo->swapchain_image_resources[i].image,
@@ -1073,7 +1078,7 @@ static void demo_draw(struct demo *demo) {
     // Ensure no more than FRAME_LAG renderings are outstanding
     vkWaitForFences(demo->device, 1, &demo->fences[demo->frame_index], VK_TRUE, UINT64_MAX);
     vkResetFences(demo->device, 1, &demo->fences[demo->frame_index]);
-
+/*
     do {
         // Get the index of the next available swapchain image:
         err =
@@ -1096,7 +1101,7 @@ static void demo_draw(struct demo *demo) {
             assert(!err);
         }
     } while (err != VK_SUCCESS);
-
+*/
     demo_update_data_buffer(demo);
 
     if (demo->VK_GOOGLE_display_timing_enabled) {
@@ -1121,8 +1126,8 @@ static void demo_draw(struct demo *demo) {
     submit_info.pNext = NULL;
     pipe_stage_flags = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     submit_info.pWaitDstStageMask = &pipe_stage_flags;
-    submit_info.waitSemaphoreCount = 1;
-    submit_info.pWaitSemaphores = &demo->image_acquired_semaphores[demo->frame_index];
+    submit_info.waitSemaphoreCount = 0;
+    submit_info.pWaitSemaphores = NULL;
     submit_info.commandBufferCount = 1;
     submit_info.pCommandBuffers = &demo->swapchain_image_resources[demo->current_buffer].cmd;
     submit_info.signalSemaphoreCount = 1;
@@ -1224,8 +1229,7 @@ static void demo_draw(struct demo *demo) {
     }
 
     err = demo->fpQueuePresentKHR(demo->present_queue, &present);
-    demo->frame_index += 1;
-    demo->frame_index %= FRAME_LAG;
+    demo->frame_index = 0;
 
     if (err == VK_ERROR_OUT_OF_DATE_KHR) {
         // demo->swapchain is out of date (e.g. the window was resized) and
@@ -1254,8 +1258,14 @@ static void demo_prepare_buffers(struct demo *demo) {
     VkSwapchainKHR oldSwapchain = demo->swapchain;
 
     // Check the surface capabilities and formats
-    VkSurfaceCapabilitiesKHR surfCapabilities;
-    err = demo->fpGetPhysicalDeviceSurfaceCapabilitiesKHR(demo->gpu, demo->surface, &surfCapabilities);
+    VkSurfaceCapabilities2KHR surfCapabilities;
+
+    VkPhysicalDeviceSurfaceInfo2KHR surfaceInfo;
+    surfaceInfo.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SURFACE_INFO_2_KHR;
+    surfaceInfo.pNext = NULL;
+    surfaceInfo.surface = demo->surface;
+
+    err = demo->fpGetPhysicalDeviceSurfaceCapabilities2KHR(demo->gpu, &surfaceInfo, &surfCapabilities);
     assert(!err);
 
     uint32_t presentModeCount;
@@ -1268,32 +1278,32 @@ static void demo_prepare_buffers(struct demo *demo) {
 
     VkExtent2D swapchainExtent;
     // width and height are either both 0xFFFFFFFF, or both not 0xFFFFFFFF.
-    if (surfCapabilities.currentExtent.width == 0xFFFFFFFF) {
+    if (surfCapabilities.surfaceCapabilities.currentExtent.width == 0xFFFFFFFF) {
         // If the surface size is undefined, the size is set to the size
         // of the images requested, which must fit within the minimum and
         // maximum values.
         swapchainExtent.width = demo->width;
         swapchainExtent.height = demo->height;
 
-        if (swapchainExtent.width < surfCapabilities.minImageExtent.width) {
-            swapchainExtent.width = surfCapabilities.minImageExtent.width;
-        } else if (swapchainExtent.width > surfCapabilities.maxImageExtent.width) {
-            swapchainExtent.width = surfCapabilities.maxImageExtent.width;
+        if (swapchainExtent.width < surfCapabilities.surfaceCapabilities.minImageExtent.width) {
+            swapchainExtent.width = surfCapabilities.surfaceCapabilities.minImageExtent.width;
+        } else if (swapchainExtent.width > surfCapabilities.surfaceCapabilities.maxImageExtent.width) {
+            swapchainExtent.width = surfCapabilities.surfaceCapabilities.maxImageExtent.width;
         }
 
-        if (swapchainExtent.height < surfCapabilities.minImageExtent.height) {
-            swapchainExtent.height = surfCapabilities.minImageExtent.height;
-        } else if (swapchainExtent.height > surfCapabilities.maxImageExtent.height) {
-            swapchainExtent.height = surfCapabilities.maxImageExtent.height;
+        if (swapchainExtent.height < surfCapabilities.surfaceCapabilities.minImageExtent.height) {
+            swapchainExtent.height = surfCapabilities.surfaceCapabilities.minImageExtent.height;
+        } else if (swapchainExtent.height > surfCapabilities.surfaceCapabilities.maxImageExtent.height) {
+            swapchainExtent.height = surfCapabilities.surfaceCapabilities.maxImageExtent.height;
         }
     } else {
         // If the surface size is defined, the swap chain size must match
-        swapchainExtent = surfCapabilities.currentExtent;
-        demo->width = surfCapabilities.currentExtent.width;
-        demo->height = surfCapabilities.currentExtent.height;
+        swapchainExtent = surfCapabilities.surfaceCapabilities.currentExtent;
+        demo->width = surfCapabilities.surfaceCapabilities.currentExtent.width;
+        demo->height = surfCapabilities.surfaceCapabilities.currentExtent.height;
     }
 
-    if (surfCapabilities.maxImageExtent.width == 0 || surfCapabilities.maxImageExtent.height == 0) {
+    if (surfCapabilities.surfaceCapabilities.maxImageExtent.width == 0 || surfCapabilities.surfaceCapabilities.maxImageExtent.height == 0) {
         demo->is_minimized = true;
         return;
     } else {
@@ -1302,7 +1312,7 @@ static void demo_prepare_buffers(struct demo *demo) {
 
     // The FIFO present mode is guaranteed by the spec to be supported
     // and to have no tearing.  It's a great default present mode to use.
-    VkPresentModeKHR swapchainPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+    VkPresentModeKHR swapchainPresentMode = VK_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR;
 
     //  There are times when you may wish to use another present mode.  The
     //  following code shows how to select them, and the comments provide some
@@ -1317,20 +1327,6 @@ static void demo_prepare_buffers(struct demo *demo) {
     // mobile devices.  That is because power is being spent rendering images
     // that may never be seen.
 
-    // VK_PRESENT_MODE_IMMEDIATE_KHR is for applications that don't care about
-    // tearing, or have some way of synchronizing their rendering with the
-    // display.
-    // VK_PRESENT_MODE_MAILBOX_KHR may be useful for applications that
-    // generally render a new presentable image every refresh cycle, but are
-    // occasionally early.  In this case, the application wants the new image
-    // to be displayed instead of the previously-queued-for-presentation image
-    // that has not yet been displayed.
-    // VK_PRESENT_MODE_FIFO_RELAXED_KHR is for applications that generally
-    // render a new presentable image every refresh cycle, but are occasionally
-    // late.  In this case (perhaps because of stuttering/latency concerns),
-    // the application wants the late image to be immediately displayed, even
-    // though that may mean some tearing.
-
     if (demo->presentMode != swapchainPresentMode) {
         for (size_t i = 0; i < presentModeCount; ++i) {
             if (presentModes[i] == demo->presentMode) {
@@ -1344,24 +1340,13 @@ static void demo_prepare_buffers(struct demo *demo) {
     }
 
     // Determine the number of VkImages to use in the swap chain.
-    // Application desires to acquire 3 images at a time for triple
-    // buffering
-    uint32_t desiredNumOfSwapchainImages = 3;
-    if (desiredNumOfSwapchainImages < surfCapabilities.minImageCount) {
-        desiredNumOfSwapchainImages = surfCapabilities.minImageCount;
-    }
-    // If maxImageCount is 0, we can ask for as many images as we want;
-    // otherwise we're limited to maxImageCount
-    if ((surfCapabilities.maxImageCount > 0) && (desiredNumOfSwapchainImages > surfCapabilities.maxImageCount)) {
-        // Application must settle for fewer images than desired:
-        desiredNumOfSwapchainImages = surfCapabilities.maxImageCount;
-    }
+    uint32_t desiredNumOfSwapchainImages = 1;
 
     VkSurfaceTransformFlagsKHR preTransform;
-    if (surfCapabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
+    if (surfCapabilities.surfaceCapabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) {
         preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
     } else {
-        preTransform = surfCapabilities.currentTransform;
+        preTransform = surfCapabilities.surfaceCapabilities.currentTransform;
     }
 
     // Find a supported composite alpha mode - one of these is guaranteed to be set
@@ -1373,7 +1358,7 @@ static void demo_prepare_buffers(struct demo *demo) {
         VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
     };
     for (uint32_t i = 0; i < ARRAY_SIZE(compositeAlphaFlags); i++) {
-        if (surfCapabilities.supportedCompositeAlpha & compositeAlphaFlags[i]) {
+        if (surfCapabilities.surfaceCapabilities.supportedCompositeAlpha & compositeAlphaFlags[i]) {
             compositeAlpha = compositeAlphaFlags[i];
             break;
         }
@@ -1970,7 +1955,7 @@ static void demo_prepare_render_pass(struct demo *demo) {
                 .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
                 .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
                 .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-                .finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                .finalLayout = VK_IMAGE_LAYOUT_SHARED_PRESENT_KHR,
             },
         [1] =
             {
@@ -3539,6 +3524,10 @@ static void demo_init_vk(struct demo *demo) {
             if (!strcmp("VK_KHR_portability_subset", device_extensions[i].extensionName)) {
                 demo->extension_names[demo->enabled_extension_count++] = "VK_KHR_portability_subset";
             }
+            if (!strcmp(VK_KHR_SHARED_PRESENTABLE_IMAGE_EXTENSION_NAME, device_extensions[i].extensionName)) {
+                demo->extension_names[demo->enabled_extension_count++] = VK_KHR_SHARED_PRESENTABLE_IMAGE_EXTENSION_NAME;
+                printf("VK_KHR_shared_presentable_image added to list\n");
+            }
             assert(demo->enabled_extension_count < 64);
         }
 
@@ -3643,6 +3632,7 @@ static void demo_init_vk(struct demo *demo) {
 
     GET_INSTANCE_PROC_ADDR(demo->inst, GetPhysicalDeviceSurfaceSupportKHR);
     GET_INSTANCE_PROC_ADDR(demo->inst, GetPhysicalDeviceSurfaceCapabilitiesKHR);
+    GET_INSTANCE_PROC_ADDR(demo->inst, GetPhysicalDeviceSurfaceCapabilities2KHR);
     GET_INSTANCE_PROC_ADDR(demo->inst, GetPhysicalDeviceSurfaceFormatsKHR);
     GET_INSTANCE_PROC_ADDR(demo->inst, GetPhysicalDeviceSurfacePresentModesKHR);
     GET_INSTANCE_PROC_ADDR(demo->inst, GetSwapchainImagesKHR);
@@ -4052,7 +4042,7 @@ static void demo_init(struct demo *demo, int argc, char **argv) {
     vec3 up = {0.0f, 1.0f, 0.0};
 
     memset(demo, 0, sizeof(*demo));
-    demo->presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    demo->presentMode = VK_PRESENT_MODE_SHARED_CONTINUOUS_REFRESH_KHR;
     demo->frameCount = INT32_MAX;
     /* Autodetect suitable / best GPU by default */
     demo->gpu_number = -1;
@@ -4062,11 +4052,6 @@ static void demo_init(struct demo *demo, int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--use_staging") == 0) {
             demo->use_staging_buffer = true;
-            continue;
-        }
-        if ((strcmp(argv[i], "--present_mode") == 0) && (i < argc - 1)) {
-            demo->presentMode = atoi(argv[i + 1]);
-            i++;
             continue;
         }
         if (strcmp(argv[i], "--break") == 0) {
@@ -4146,20 +4131,13 @@ static void demo_init(struct demo *demo, int argc, char **argv) {
             "\t[--gpu_number <index of physical device>]\n"
             "\t[--present_mode <present mode enum>]\n"
             "\t[--width <width>] [--height <height>]\n"
-            "\t[--force_errors]\n"
-            "\t<present_mode_enum>\n"
-            "\t\tVK_PRESENT_MODE_IMMEDIATE_KHR = %d\n"
-            "\t\tVK_PRESENT_MODE_MAILBOX_KHR = %d\n"
-            "\t\tVK_PRESENT_MODE_FIFO_KHR = %d\n"
-            "\t\tVK_PRESENT_MODE_FIFO_RELAXED_KHR = %d\n";
-        int length = snprintf(NULL, 0, message, APP_SHORT_NAME, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
-                              VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_FIFO_RELAXED_KHR);
+            "\t[--force_errors]\n";
+        int length = snprintf(NULL, 0, message, APP_SHORT_NAME);
         char *usage = (char *)malloc(length + 1);
         if (!usage) {
             exit(1);
         }
-        snprintf(usage, length + 1, message, APP_SHORT_NAME, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR,
-                 VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_FIFO_RELAXED_KHR);
+        snprintf(usage, length + 1, message, APP_SHORT_NAME);
 #if defined(_WIN32)
         if (!demo->suppress_popups) MessageBox(NULL, usage, "Usage Error", MB_OK);
 #else
